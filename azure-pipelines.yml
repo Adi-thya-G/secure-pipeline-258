@@ -1,0 +1,50 @@
+
+trigger: 
+  - main 
+  
+parameters: 
+  - name: simulateTampering 
+    displayName: 'Simulate tampering with the artifact (the integrity check should fail)' 
+    type: boolean 
+    default: 'false' 
+  
+pool: 
+  vmImage: 'ubuntu-latest' 
+  
+stages: 
+  - stage: CodeChecks 
+    displayName: '1. Code checks' 
+    jobs: 
+      - job: SecretScan 
+        steps: 
+          - script: bash security/check-secrets.sh 
+            displayName: 'Gate 1: scan the repository for secrets' 
+  
+  - stage: Build 
+    displayName: '2. Build and record the artifact hash' 
+    dependsOn: CodeChecks 
+    jobs: 
+      - job: BuildImage 
+        steps: 
+          - script: | 
+              set -euo pipefail 
+              mkdir -p $(Build.ArtifactStagingDirectory)/image 
+              docker build -t demobook:ci app 
+              docker save demobook:ci -o $(Build.ArtifactStagingDirectory)/image/demobook
+image.tar 
+              cd $(Build.ArtifactStagingDirectory)/image 
+              sha256sum demobook-image.tar | tee demobook-image.tar.sha256 
+            displayName: 'Build the image, save it and record its SHA-256' 
+          - publish: $(Build.ArtifactStagingDirectory)/image 
+            artifact: image 
+            displayName: 'Publish the image and its hash' 
+  
+  - stage: SecurityTest 
+    displayName: '3. Verify integrity and scan with ZAP' 
+    dependsOn: Build 
+    jobs: 
+      - job: VerifyAndScan 
+        steps: 
+          - download: current 
+            artifact: image 
+          - ${{ if eq(parameters.simulateTampering, true) }}:
